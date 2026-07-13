@@ -17,6 +17,7 @@ import (
 
 	"google.golang.org/grpc"
 
+	"github.com/zebi30/sms-spam-validation-with-custom-agent-framework/internal/cluster"
 	"github.com/zebi30/sms-spam-validation-with-custom-agent-framework/internal/dataset"
 	"github.com/zebi30/sms-spam-validation-with-custom-agent-framework/internal/fl"
 	"github.com/zebi30/sms-spam-validation-with-custom-agent-framework/internal/nb"
@@ -26,9 +27,10 @@ import (
 )
 
 func main() {
-	role := flag.String("role", "", "coordinator | worker | aggregator")
+	role := flag.String("role", "", "coordinator | worker | aggregator | provider")
 	nodeID := flag.String("node-id", "", "this node's actor ID")
 	listen := flag.String("listen", ":9000", "host:port this node's actor-transport gRPC server listens on")
+	advertiseAddr := flag.String("advertise-addr", "", "host:port other nodes should dial to reach this one (defaults to -listen; must be set explicitly when -listen is a wildcard like 0.0.0.0:9000, e.g. to the container's own service name)")
 
 	aggregatorAddr := flag.String("aggregator-addr", "", "host:port of the Aggregator (worker, coordinator)")
 	aggregatorID := flag.String("aggregator-id", "aggregator", "actor ID of the Aggregator")
@@ -42,10 +44,16 @@ func main() {
 	trainRatio := flag.Float64("train-ratio", 0.8, "coordinator only: fraction of the dataset used for training")
 	seed := flag.Int64("seed", 42, "coordinator only: random seed for the train/test split")
 	roundTimeout := flag.Duration("round-timeout", 60*time.Second, "coordinator only: how long to wait for the FL round to complete")
+
+	clusterMode := flag.String("cluster-mode", "none", "none | provider | p2p — join a cluster layer alongside the FL role")
+	providerAddr := flag.String("provider-addr", "", "cluster-mode=provider: host:port of the ProviderActor")
+	providerID := flag.String("provider-id", "provider", "cluster-mode=provider: actor ID of the ProviderActor")
+	p2pBind := flag.String("p2p-bind", "0.0.0.0:7946", "cluster-mode=p2p: host:port memberlist gossips on")
+	p2pSeeds := flag.String("p2p-seeds", "", "cluster-mode=p2p: comma-separated memberlist bind addrs to join through (empty for the first node)")
 	flag.Parse()
 
 	if *role == "" || *nodeID == "" {
-		fmt.Fprintln(os.Stderr, "usage: cluster-node -role=coordinator|worker|aggregator -node-id=<id> ...")
+		fmt.Fprintln(os.Stderr, "usage: cluster-node -role=coordinator|worker|aggregator|provider -node-id=<id> ...")
 		os.Exit(2)
 	}
 
@@ -57,6 +65,15 @@ func main() {
 	defer grpcServer.GracefulStop()
 	log.Printf("cluster-node: role=%s node-id=%s listening on %s", *role, *nodeID, lis.Addr())
 
+	selfAddr := *advertiseAddr
+	if selfAddr == "" {
+		selfAddr = *listen
+	}
+
+	if *role != "provider" {
+		joinCluster(system, *nodeID, selfAddr, *clusterMode, *providerAddr, *providerID, *p2pBind, *p2pSeeds)
+	}
+
 	switch *role {
 	case "worker":
 		runWorker(system, *nodeID, *aggregatorAddr, *aggregatorID)
@@ -64,9 +81,53 @@ func main() {
 		runAggregator(system, *nodeID, *coordinatorAddr, *coordinatorID)
 	case "coordinator":
 		runCoordinator(system, *nodeID, *aggregatorAddr, *aggregatorID, *workersFlag, *dataPath, *partitionsDir, *trainRatio, *seed, *roundTimeout)
+	case "provider":
+		runProvider(system, *nodeID)
 	default:
 		log.Fatalf("cluster-node: unknown -role=%q", *role)
 	}
+}
+
+// joinCluster optionally spawns a cluster-layer actor alongside the node's FL
+// role, in the same ActorSystem and (for provider mode) reusing the same
+// gRPC transport server already listening on selfAddr.
+func joinCluster(system *actor.ActorSystem, nodeID, selfAddr, mode, providerAddr, providerID, p2pBind, p2pSeeds string) {
+	clusterID := nodeID + "-cluster"
+	switch mode {
+	case "none":
+		return
+	case "provider":
+		if providerAddr == "" {
+			log.Fatal("cluster-node: -cluster-mode=provider requires -provider-addr")
+		}
+		client := cluster.NewProviderClientActor(clusterID, selfAddr, providerID, providerAddr)
+		if _, err := system.Spawn(client); err != nil {
+			log.Fatalf("cluster-node: spawn provider client: %v", err)
+		}
+		log.Printf("cluster-node: %s joined cluster via provider at %s", nodeID, providerAddr)
+	case "p2p":
+		var seeds []string
+		if p2pSeeds != "" {
+			seeds = strings.Split(p2pSeeds, ",")
+		}
+		p2p := cluster.NewP2PActor(clusterID, p2pBind, selfAddr, seeds)
+		if _, err := system.Spawn(p2p); err != nil {
+			log.Fatalf("cluster-node: spawn p2p actor: %v", err)
+		}
+		log.Printf("cluster-node: %s joined cluster via gossip, bound on %s", nodeID, p2pBind)
+	default:
+		log.Fatalf("cluster-node: unknown -cluster-mode=%q", mode)
+	}
+}
+
+// runProvider spawns a ProviderActor and blocks forever, waiting for
+// JoinCluster/DiscoverPeers requests from other nodes over gRPC.
+func runProvider(system *actor.ActorSystem, nodeID string) {
+	if _, err := system.Spawn(cluster.NewProviderActor(nodeID)); err != nil {
+		log.Fatalf("cluster-node: spawn provider: %v", err)
+	}
+	log.Printf("cluster-node: provider %s ready", nodeID)
+	select {} // serve forever
 }
 
 func startTransport(system *actor.ActorSystem, listen string) (*grpc.Server, net.Listener, error) {
@@ -199,19 +260,44 @@ func runCoordinator(system *actor.ActorSystem, nodeID, aggregatorAddr, aggregato
 
 	select {
 	case result := <-results:
-		relative := result.Metrics.Accuracy / baseline.Accuracy
-		status := "FAIL"
-		if relative >= 0.95 {
-			status = "PASS"
-		}
-		fmt.Printf("federated model:      accuracy=%.4f precision=%.4f recall=%.4f f1=%.4f\n",
-			result.Metrics.Accuracy, result.Metrics.Precision, result.Metrics.Recall, result.Metrics.F1)
-		fmt.Printf("centralized baseline: accuracy=%.4f precision=%.4f recall=%.4f f1=%.4f\n",
-			baseline.Accuracy, baseline.Precision, baseline.Recall, baseline.F1)
-		fmt.Printf("federated/baseline accuracy ratio: %.4f (target >= 0.95) [%s]\n", relative, status)
+		printResult(result.Metrics, baseline)
 	case <-time.After(roundTimeout):
 		log.Fatal("cluster-node: timed out waiting for FL round to complete")
 	}
+}
+
+const (
+	ansiReset = "\033[0m"
+	ansiBold  = "\033[1m"
+	ansiCyan  = "\033[36m"
+	ansiGreen = "\033[32m"
+	ansiRed   = "\033[31m"
+)
+
+// printResult prints the round outcome as a banner that stands out in a
+// terminal streaming interleaved logs from several containers at once
+// (docker compose up shows all services' output live, line by line).
+func printResult(federated, baseline nb.Metrics) {
+	relative := federated.Accuracy / baseline.Accuracy
+	status, color := "FAIL", ansiRed
+	if relative >= 0.95 {
+		status, color = "PASS", ansiGreen
+	}
+
+	line := strings.Repeat("=", 62)
+	fmt.Println()
+	fmt.Println(ansiBold + ansiCyan + line + ansiReset)
+	fmt.Println(ansiBold + ansiCyan + "  REZULTAT FEDERATIVNE RUNDE" + ansiReset)
+	fmt.Println(ansiBold + ansiCyan + line + ansiReset)
+	fmt.Printf("  %-24s accuracy=%.4f  precision=%.4f  recall=%.4f  f1=%.4f\n",
+		"Federativni model:", federated.Accuracy, federated.Precision, federated.Recall, federated.F1)
+	fmt.Printf("  %-24s accuracy=%.4f  precision=%.4f  recall=%.4f  f1=%.4f\n",
+		"Centralni baseline:", baseline.Accuracy, baseline.Precision, baseline.Recall, baseline.F1)
+	fmt.Printf("  Odnos federativni/baseline: %.4f  (cilj >= 0.95)\n", relative)
+	fmt.Println()
+	fmt.Printf("  %s%s>>> %s <<<%s\n", ansiBold, color, status, ansiReset)
+	fmt.Println(ansiBold + ansiCyan + line + ansiReset)
+	fmt.Println()
 }
 
 type workerAddr struct {

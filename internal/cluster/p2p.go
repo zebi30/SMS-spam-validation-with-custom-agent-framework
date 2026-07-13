@@ -83,10 +83,27 @@ func (p *P2PActor) OnStart(ctx *actor.Context) {
 	p.list = list
 
 	if len(p.Seeds) > 0 {
-		if _, err := list.Join(p.Seeds); err != nil {
-			log.Printf("cluster: p2p node %s: join seeds %v: %v", p.SelfID, p.Seeds, err)
+		joinWithRetry(p.SelfID, list, p.Seeds)
+	}
+}
+
+// joinWithRetry retries memberlist.Join a few times with a short delay, so a
+// seed that is still starting up (e.g. a Docker container not yet listening)
+// doesn't permanently exclude this node from the cluster.
+func joinWithRetry(selfID string, list *memberlist.Memberlist, seeds []string) {
+	const attempts = 10
+	const delay = 500 * time.Millisecond
+
+	var err error
+	for i := 0; i < attempts; i++ {
+		if _, err = list.Join(seeds); err == nil {
+			return
+		}
+		if i < attempts-1 {
+			time.Sleep(delay)
 		}
 	}
+	log.Printf("cluster: p2p node %s: join seeds %v: %v", selfID, seeds, err)
 }
 
 // LocalAddr returns the host:port memberlist actually bound to. It is only
