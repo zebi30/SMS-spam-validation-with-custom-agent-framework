@@ -1,0 +1,65 @@
+services:
+  aggregator:
+    build: .
+    command:
+      - -role=aggregator
+      - -node-id=aggregator
+      - -listen=0.0.0.0:9000
+      - -coordinator-addr=coordinator:9000
+      - -coordinator-id=coordinator
+
+  worker-0:
+    build: .
+    command:
+      - -role=worker
+      - -node-id=worker-0
+      - -listen=0.0.0.0:9000
+      - -aggregator-addr=aggregator:9000
+      - -aggregator-id=aggregator
+    volumes:
+      - partitions:/data/partitions
+
+  worker-1:
+    build: .
+    command:
+      - -role=worker
+      - -node-id=worker-1
+      - -listen=0.0.0.0:9000
+      - -aggregator-addr=aggregator:9000
+      - -aggregator-id=aggregator
+    volumes:
+      - partitions:/data/partitions
+
+  worker-2:
+    build: .
+    command:
+      - -role=worker
+      - -node-id=worker-2
+      - -listen=0.0.0.0:9000
+      - -aggregator-addr=aggregator:9000
+      - -aggregator-id=aggregator
+    volumes:
+      - partitions:/data/partitions
+
+  coordinator:
+    build: .
+    command:
+      - -role=coordinator
+      - -node-id=coordinator
+      - -listen=0.0.0.0:9000
+      - -aggregator-addr=aggregator:9000
+      - -aggregator-id=aggregator
+      - -workers=worker-0@worker-0:9000,worker-1@worker-1:9000,worker-2@worker-2:9000
+      - -data=/app/data/SMSSpamCollection
+      - -partitions-dir=/data/partitions
+      - -round-timeout=60s
+    volumes:
+      - partitions:/data/partitions
+    depends_on:
+      - aggregator
+      - worker-0
+      - worker-1
+      - worker-2
+
+volumes:
+  partitions:

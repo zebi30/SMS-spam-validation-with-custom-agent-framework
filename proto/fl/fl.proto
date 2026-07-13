@@ -1,0 +1,49 @@
+syntax = "proto3";
+
+package flpb;
+
+option go_package = "github.com/zebi30/sms-spam-validation-with-custom-agent-framework/internal/fl/flpb";
+
+// TrainRequest asks a Worker to train locally on the partition at
+// dataset_partition_path for the given FL round. The path must be reachable
+// from the Worker's own filesystem (e.g. a shared volume in docker-compose).
+message TrainRequest {
+  int64 round_id = 1;
+  string dataset_partition_path = 2;
+}
+
+// WordCounts is a wrapper around a flat word->count map, needed because
+// proto3 does not allow a map value to itself be a map.
+message WordCounts {
+  map<string, int64> counts = 1;
+}
+
+// LocalModelUpdate carries a Worker's local word/class counts to the
+// Aggregator. Raw messages never leave the Worker.
+message LocalModelUpdate {
+  int64 round_id = 1;
+  string worker_id = 2;
+  map<string, WordCounts> word_counts = 3;
+  map<string, int64> class_totals = 4;
+}
+
+// AggregateTrigger tells the Aggregator how many LocalModelUpdate messages to
+// collect for round_id before producing an AggregatedModel.
+message AggregateTrigger {
+  int64 round_id = 1;
+  int64 expected_workers = 2;
+}
+
+// WordProbs is a wrapper around a flat word->probability map, for the same
+// nested-map reason as WordCounts.
+message WordProbs {
+  map<string, double> probs = 1;
+}
+
+// AggregatedModel carries the FedAvg-combined global model from the
+// Aggregator back to the Coordinator for evaluation.
+message AggregatedModel {
+  int64 round_id = 1;
+  map<string, WordProbs> global_word_probs = 2;
+  map<string, double> class_priors = 3;
+}

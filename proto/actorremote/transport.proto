@@ -1,0 +1,25 @@
+syntax = "proto3";
+
+package actorremote;
+
+option go_package = "github.com/zebi30/sms-spam-validation-with-custom-agent-framework/pkg/actor/remote/remotepb";
+
+import "google/protobuf/any.proto";
+
+// Envelope addresses a message to a specific actor on the receiving node.
+// The payload is a well-known google.protobuf.Any so the transport stays
+// generic: any proto.Message can be delivered without the framework needing
+// to know its concrete type ahead of time.
+message Envelope {
+  string target_id = 1;
+  google.protobuf.Any payload = 2;
+}
+
+// Ack is an empty acknowledgement of a delivered Envelope.
+message Ack {}
+
+// Transport is the gRPC service actor nodes use to deliver messages to
+// actors running on other processes or machines.
+service Transport {
+  rpc Send(Envelope) returns (Ack);
+}
