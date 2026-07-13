@@ -1,12 +1,28 @@
 services:
+  # Only started with `docker compose --profile provider up`. Central
+  # registry node for Provider cluster mode; irrelevant (and not started)
+  # when CLUSTER_MODE=p2p or CLUSTER_MODE=none.
+  provider:
+    build: .
+    profiles: ["provider"]
+    command:
+      - -role=provider
+      - -node-id=provider
+      - -listen=0.0.0.0:9200
+
   aggregator:
     build: .
     command:
       - -role=aggregator
       - -node-id=aggregator
       - -listen=0.0.0.0:9000
+      - -advertise-addr=aggregator:9000
       - -coordinator-addr=coordinator:9000
       - -coordinator-id=coordinator
+      - -cluster-mode=${CLUSTER_MODE:-none}
+      - -provider-addr=provider:9200
+      - -p2p-bind=0.0.0.0:7946
+      - -p2p-seeds=coordinator:7946
 
   worker-0:
     build: .
@@ -14,8 +30,13 @@ services:
       - -role=worker
       - -node-id=worker-0
       - -listen=0.0.0.0:9000
+      - -advertise-addr=worker-0:9000
       - -aggregator-addr=aggregator:9000
       - -aggregator-id=aggregator
+      - -cluster-mode=${CLUSTER_MODE:-none}
+      - -provider-addr=provider:9200
+      - -p2p-bind=0.0.0.0:7946
+      - -p2p-seeds=coordinator:7946
     volumes:
       - partitions:/data/partitions
 
@@ -25,8 +46,13 @@ services:
       - -role=worker
       - -node-id=worker-1
       - -listen=0.0.0.0:9000
+      - -advertise-addr=worker-1:9000
       - -aggregator-addr=aggregator:9000
       - -aggregator-id=aggregator
+      - -cluster-mode=${CLUSTER_MODE:-none}
+      - -provider-addr=provider:9200
+      - -p2p-bind=0.0.0.0:7946
+      - -p2p-seeds=coordinator:7946
     volumes:
       - partitions:/data/partitions
 
@@ -36,8 +62,13 @@ services:
       - -role=worker
       - -node-id=worker-2
       - -listen=0.0.0.0:9000
+      - -advertise-addr=worker-2:9000
       - -aggregator-addr=aggregator:9000
       - -aggregator-id=aggregator
+      - -cluster-mode=${CLUSTER_MODE:-none}
+      - -provider-addr=provider:9200
+      - -p2p-bind=0.0.0.0:7946
+      - -p2p-seeds=coordinator:7946
     volumes:
       - partitions:/data/partitions
 
@@ -47,12 +78,17 @@ services:
       - -role=coordinator
       - -node-id=coordinator
       - -listen=0.0.0.0:9000
+      - -advertise-addr=coordinator:9000
       - -aggregator-addr=aggregator:9000
       - -aggregator-id=aggregator
       - -workers=worker-0@worker-0:9000,worker-1@worker-1:9000,worker-2@worker-2:9000
       - -data=/app/data/SMSSpamCollection
       - -partitions-dir=/data/partitions
       - -round-timeout=60s
+      - -cluster-mode=${CLUSTER_MODE:-none}
+      - -provider-addr=provider:9200
+      - -p2p-bind=0.0.0.0:7946
+      # coordinator has no -p2p-seeds: it's the bootstrap node other nodes gossip through
     volumes:
       - partitions:/data/partitions
     depends_on:

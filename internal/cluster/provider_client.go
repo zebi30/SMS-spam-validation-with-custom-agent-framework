@@ -2,6 +2,7 @@ package cluster
 
 import (
 	"log"
+	"time"
 
 	"google.golang.org/grpc"
 
@@ -81,15 +82,34 @@ func (c *ProviderClientActor) registerAndDiscover() {
 	}
 
 	self := &clusterpb.PeerInfo{NodeId: c.SelfID, Addr: c.SelfAddr}
-	if err := c.provider.Tell(&clusterpb.JoinCluster{Self: self}); err != nil {
+	if err := tellWithRetry(c.provider, &clusterpb.JoinCluster{Self: self}); err != nil {
 		log.Printf("cluster: node %s: join: %v", c.SelfID, err)
 		return
 	}
 
 	replyTo := &clusterpb.ReplyAddress{Addr: c.SelfAddr, ActorId: c.SelfID}
-	if err := c.provider.Tell(&clusterpb.DiscoverPeers{ReplyTo: replyTo}); err != nil {
+	if err := tellWithRetry(c.provider, &clusterpb.DiscoverPeers{ReplyTo: replyTo}); err != nil {
 		log.Printf("cluster: node %s: discover: %v", c.SelfID, err)
 	}
+}
+
+// tellWithRetry retries a Tell a few times with a short delay, so a Provider
+// that is still starting up (e.g. a Docker container not yet listening)
+// doesn't permanently block this node from joining the cluster.
+func tellWithRetry(ref actor.Ref, msg actor.Message) error {
+	const attempts = 10
+	const delay = 500 * time.Millisecond
+
+	var err error
+	for i := 0; i < attempts; i++ {
+		if err = ref.Tell(msg); err == nil {
+			return nil
+		}
+		if i < attempts-1 {
+			time.Sleep(delay)
+		}
+	}
+	return err
 }
 
 func (c *ProviderClientActor) replyPeers(ctx *actor.Context, q QueryPeers) {
