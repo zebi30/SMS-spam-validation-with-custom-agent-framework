@@ -1,0 +1,27 @@
+syntax = "proto3";
+
+package registrypb;
+
+option go_package = "github.com/zebi30/sms-spam-validation-with-custom-agent-framework/internal/registry/registrypb";
+
+// NodeJoin announces that node_id is now an active cluster member.
+message NodeJoin {
+  string node_id = 1;
+}
+
+// NodeLeave announces that node_id has left the cluster.
+message NodeLeave {
+  string node_id = 1;
+}
+
+// RoundComplete tells the registry that node_id finished one more FL round.
+message RoundComplete {
+  string node_id = 1;
+}
+
+// MergeRequest carries a peer registry's G-Counter snapshot so two replicas
+// can converge via CRDT merge, over the wire, in either direction.
+message MergeRequest {
+  string node_id = 1;
+  map<string, int64> counter = 2;
+}

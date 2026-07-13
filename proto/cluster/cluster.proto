@@ -1,0 +1,40 @@
+syntax = "proto3";
+
+package clusterpb;
+
+option go_package = "github.com/zebi30/sms-spam-validation-with-custom-agent-framework/internal/cluster/clusterpb";
+
+// PeerInfo identifies one cluster member and the address its
+// actor-transport gRPC server (pkg/actor/remote) listens on.
+message PeerInfo {
+  string node_id = 1;
+  string addr = 2;
+}
+
+// ReplyAddress tells a Provider node where to route an asynchronous reply:
+// which actor-transport server to dial, and which local actor to address.
+message ReplyAddress {
+  string addr = 1;
+  string actor_id = 2;
+}
+
+// JoinCluster registers self as an active member with the Provider node.
+message JoinCluster {
+  PeerInfo self = 1;
+}
+
+// LeaveCluster removes node_id from the Provider's active member list.
+message LeaveCluster {
+  string node_id = 1;
+}
+
+// DiscoverPeers asks the Provider node for the current member list, to be
+// delivered asynchronously as a PeerList sent to reply_to.
+message DiscoverPeers {
+  ReplyAddress reply_to = 1;
+}
+
+// PeerList is the Provider's answer to JoinCluster or DiscoverPeers.
+message PeerList {
+  repeated PeerInfo peers = 1;
+}
